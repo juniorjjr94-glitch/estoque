@@ -8,6 +8,7 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://unpkg.com/html5-qrcode"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
 <style>
   *{box-sizing:border-box}
   body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#f4f6f8;color:#1b1f24}
@@ -53,6 +54,7 @@
   .cn{font-weight:600;margin-top:2px}.cm{color:#6e7781}
   .tag{display:inline-block;padding:2px 8px;border-radius:10px;font-size:12px;background:#eaeef2}
   .tag.ok{background:#dafbe1;color:#1a7f37}.tag.run{background:#fff8c5;color:#7d4e00}
+  .warn{background:#fff8c5;border:1px solid #d4a72c;border-radius:8px;padding:8px;font-size:13px;margin:8px 0}
   @media print{
     nav,header,.noprint,button{display:none!important}
     body{background:#fff}
@@ -169,7 +171,9 @@
   <!-- INVENTÁRIOS -->
   <main id="tInv" hidden>
     <div class="row" style="margin-bottom:10px">
-      <button class="p" onclick="abrirNovoInv()">+ Novo inventário</button>
+      <button class="p" onclick="$('#pdfIn').click()">📄 Importar PDF do Escolector</button>
+      <button onclick="abrirNovoInv()">+ Contar aqui</button>
+      <input type="file" id="pdfIn" accept="application/pdf,.pdf" hidden onchange="lerPdf(this)">
     </div>
     <div class="card scroll"><table>
       <thead><tr><th>Loja</th><th>Status</th><th class="n">Acerto</th><th></th></tr></thead>
@@ -215,6 +219,8 @@
     <button class="p" onclick="criarInv()">Criar</button>
   </div>
 </dialog>
+
+<dialog id="dPdf"><div id="pdfBody"></div></dialog>
 
 <div id="scanOv" hidden>
   <div id="reader"></div>
@@ -330,20 +336,22 @@ function renderDash(){
 
   const fin = invs.filter(i => i.status === 'finalizado' && i.finalizado_em && i.loja_id);
   const doMes = fin.filter(i => ym(i.finalizado_em) === mesSel);
-  const lojasMes = new Set(doMes.map(i => i.loja_id)).size;
+  const lojasMes = new Set(doMes.filter(i => i.conta_meta !== false).map(i => i.loja_id)).size;
   const doAno = fin.filter(i => ym(i.finalizado_em).startsWith(ano));
-  const lojasAno = new Set(doAno.map(i => i.loja_id));
+  const lojasAno = new Set(doAno.filter(i => i.conta_meta !== false).map(i => i.loja_id));
   const pendentes = lojas.filter(l => !lojasAno.has(l.id));
   const abertos = invs.filter(i => i.status === 'aberto').length;
 
   const falta = soma(doMes, 'valor_falta'), sobra = soma(doMes, 'valor_sobra'), vest = soma(doMes, 'valor_estoque');
   const accMes = pct(soma(doMes, 'itens_ok'), soma(doMes, 'total_itens'));
   const accAno = pct(soma(doAno, 'itens_ok'), soma(doAno, 'total_itens'));
+  const qd = doMes.filter(i => Number(i.qtd_prevista) > 0 && i.acuracia_qtd !== null);
+  const accQtd = qd.length ? fmtPct(qd.reduce((s, i) => s + Number(i.acuracia_qtd) * Number(i.qtd_prevista), 0) / qd.reduce((s, i) => s + Number(i.qtd_prevista), 0)) : '-';
   const pctMeta = meta > 0 ? Math.min(100, lojasMes / meta * 100) : 0;
 
   const porMes = Array.from({length:12}, (_, m) => {
     const k = ano + '-' + String(m + 1).padStart(2, '0');
-    return new Set(fin.filter(i => ym(i.finalizado_em) === k).map(i => i.loja_id)).size;
+    return new Set(fin.filter(i => i.conta_meta !== false && ym(i.finalizado_em) === k).map(i => i.loja_id)).size;
   });
   const max = Math.max(meta, ...porMes, 1);
   const cols = porMes.map((n, m) => `<div class="col"><div class="cv">
@@ -358,7 +366,7 @@ function renderDash(){
     .sort((a, b) => a.itens_ok / a.total_itens - b.itens_ok / b.total_itens).slice(0, 5);
 
   const linhasMes = doMes.sort((a, b) => new Date(a.finalizado_em) - new Date(b.finalizado_em)).map(i => `<tr>
-      <td>${esc(i.lojas?.nome || '-')}<div class="muted">${fmtData(i.finalizado_em)}</div></td>
+      <td>${esc(i.lojas?.nome || '-')}${i.conta_meta === false ? ' <span class="tag">parcial</span>' : ''}<div class="muted">${i.origem === 'escolector' ? esc(i.nome) + ' · ' : ''}${fmtData(i.finalizado_em)}</div></td>
       <td class="n">${pct(i.itens_ok, i.total_itens)}</td>
       <td class="n neg">${brl(i.valor_falta)}</td><td class="n pos">${brl(i.valor_sobra)}</td></tr>`).join('');
 
@@ -373,6 +381,8 @@ function renderDash(){
     <div class="kpis">
       <div class="kpi"><span>Acuracidade do mês</span><b>${accMes}</b><small>itens sem divergência</small></div>
       <div class="kpi"><span>Acuracidade no ano</span><b>${accAno}</b><small>${doAno.length} inventário(s) em ${ano}</small></div>
+      <div class="kpi"><span>Acurácia em quantidade (mês)</span><b>${accQtd}</b><small>líquida, como no Escolector</small></div>
+      <div class="kpi"><span>Estoque previsto no mês (custo)</span><b>${brl(vest)}</b><small>valor dos itens inventariados</small></div>
       <div class="kpi"><span>Falta (custo) no mês</span><b class="neg">${brl(falta)}</b></div>
       <div class="kpi"><span>Sobra (custo) no mês</span><b class="pos">${brl(sobra)}</b></div>
       <div class="kpi"><span>Divergência líquida</span><b class="${falta + sobra < 0 ? 'neg' : 'pos'}">${brl(falta + sobra)}</b><small>${pct(Math.abs(falta) + sobra, vest)} do estoque contado</small></div>
@@ -651,7 +661,7 @@ async function removerContagem(id){
 /* ---------- Inventários: lista e relatório ---------- */
 function renderInvs(){
   $('#listaInv').innerHTML = invs.map(i => `<tr>
-    <td>${esc(i.lojas?.nome || i.nome)}<div class="muted">${fmtData(i.finalizado_em || i.criado_em)}</div></td>
+    <td>${esc(i.lojas?.nome || i.nome)}<div class="muted">${i.origem === 'escolector' ? esc(i.nome) + ' · ' : ''}${fmtData(i.finalizado_em || i.criado_em)}</div></td>
     <td><span class="tag ${i.status === 'aberto' ? 'run' : 'ok'}">${i.status === 'aberto' ? 'em andamento' : 'finalizado'}</span></td>
     <td class="n">${i.status === 'finalizado' ? pct(i.itens_ok, i.total_itens) : '-'}</td>
     <td class="n"><button onclick="verRel('${i.id}')">Ver</button></td></tr>`).join('')
@@ -659,6 +669,7 @@ function renderInvs(){
 }
 async function verRel(id){
   const inv = invs.find(i => i.id === id);
+  if(inv.origem === 'escolector') return verRelPdf(inv);
   let cs;
   try{
     cs = await fetchAll(() => sb.from('contagens').select('produto_id,quantidade,esperado,custo,produtos(nome,marca,codigo_barras)').eq('inventario_id', id).order('id'));
@@ -698,13 +709,14 @@ async function verRel(id){
     ${dif.length > 300 ? `<p class="muted">Mostrando 300 de ${dif.length} divergências. Exporte o CSV para ver todas.</p>` : ''}
     <div class="row noprint" style="margin-top:10px">
       <button onclick="baixarCsv('${esc((inv.lojas?.nome || inv.nome).replace(/[^\w]+/g, '_'))}')">⬇ Exportar CSV</button>
+      <button class="d" onclick="excluirInv('${inv.id}')">🗑 Excluir</button>
       ${inv.status === 'aberto' ? `<button class="p" onclick="finalizar('${inv.id}')">Finalizar inventário</button>` : ''}
     </div>
   </div>`;
   $('#rel').scrollIntoView({ behavior:'smooth' });
 }
-function baixarCsv(nome){
-  const linhas = [['marca','produto','ean','esperado','contado','diferenca','valor_diferenca']].concat(relRows)
+function baixarCsv(nome, cab){
+  const linhas = [cab || ['marca','produto','ean','esperado','contado','diferenca','valor_diferenca']].concat(relRows)
     .map(r => r.map(x => '"' + String(x).replace(/"/g, '""').replace('.', ',') + '"').join(';'));
   const blob = new Blob(['\uFEFF' + linhas.join('\n')], { type:'text/csv;charset=utf-8' });
   const a = document.createElement('a');
@@ -717,6 +729,223 @@ async function finalizar(id){
   const r = await sb.rpc('finalizar_inventario', { p_id: id, p_ajustar: ajustar, p_zerar: zerar });
   if(r.error) return alert(r.error.message);
   estRows = null; await loadAll(); verRel(id);
+}
+
+/* ---------- Importar PDF do Escolector ---------- */
+/* PARSER-START */
+const fmtPct = n => Number(n).toFixed(2).replace('.', ',') + '%';
+const pNum = s => parseFloat(String(s ?? '').replace(/[^0-9,.\-]/g, '').replace(/\.(?=\d{3}(?:\D|$))/g, '').replace(',', '.')) || 0;
+function parseEscolector(linhas){
+  const txt = linhas.join('\n').normalize('NFC');
+  const val = re => { const m = txt.match(re); return m ? m[1].trim() : ''; };
+  const nn = re => { const m = txt.match(re); return m ? pNum(m[1]) : null; };
+  const dt = re => {
+    const m = txt.match(re); if(!m) return null;
+    const [d, mo, y] = m[1].split('/').map(Number), [h, mi] = m[2].split(':').map(Number);
+    return new Date(y, mo - 1, d, h, mi).toISOString();
+  };
+  if(!/Resumo Final/i.test(txt) || !/Comparativo/i.test(txt)) throw new Error('este PDF não parece ser o "Resumo Final" do Escolector.');
+  const idm = txt.match(/Inventário:\s*(.+?)\s*\|\s*#(\d+)/);
+  const P = {
+    id: idm ? idm[2] : null,
+    nome: val(/^\s*Nome[ \t]+(.+)$/m) || (idm ? idm[1] : 'Inventário'),
+    status: val(/^\s*Status[ \t]+(.+)$/m),
+    inicio: dt(/^\s*Início contagem[ \t]+(\d{2}\/\d{2}\/\d{4})\s+(\d{2}:\d{2})/m),
+    fim: dt(/^\s*Final contagem[ \t]+(\d{2}\/\d{2}\/\d{4})\s+(\d{2}:\d{2})/m),
+    codContados: nn(/^\s*Qtd códigos contada[ \t]+(\d+)[ \t]*$/m),
+    qtdContada: nn(/^\s*Qtd total contada[ \t]+(\d+)[ \t]*$/m),
+    valorContado: nn(/^\s*Valor total contado[ \t]+R\$\s*([\d.,]+)/m),
+    codPrev: nn(/^\s*Qtd códigos prevista[ \t]+(\d+)/m),
+    qtdPrev: nn(/^\s*Qtd total prevista[ \t]+(\d+)/m),
+    valorPrev: nn(/^\s*Valor total previsto[ \t]+R\$\s*([\d.,]+)/m),
+    accQtd: nn(/^\s*Acurácia Qtd[ \t]+([\d.,]+)\s*%/m),
+    accSku: nn(/^\s*Acurácia Cód\/Qtd[ \t]+([\d.,]+)\s*%/m),
+    codDiv: nn(/^\s*Qtd códigos divergentes[ \t]+(\d+)/m),
+    qtdDiv: nn(/^\s*Qtd total divergente[ \t]+(\d+)/m),
+    valorSobra: nn(/^\s*Valor total divergências positivas[ \t]+R\$\s*([\d.,]+)/m)
+  };
+  const mn = txt.match(/^\s*Valor total divergências negativas[ \t]+(-?)\s*R\$\s*(-?[\d.,]+)/m);
+  P.valorFalta = mn ? -Math.abs(pNum(mn[2])) : null;
+  const faltam = ['accSku', 'codPrev', 'valorPrev', 'valorSobra', 'valorFalta'].filter(k => P[k] === null);
+  if(faltam.length) throw new Error('não encontrei estes campos no PDF: ' + faltam.join(', '));
+
+  // filial (dispositivo)
+  P.filial = '';
+  const di = linhas.findIndex(l => /^\s*Dispositivos:/i.test(l));
+  if(di >= 0) for(let k = di + 1; k < Math.min(di + 4, linhas.length); k++){
+    const m = linhas[k].trim().match(/^\d+:\s*(.+?)(?=\s+\d+:\s|$)/);
+    if(m){ P.filial = m[1].trim(); break; }
+  }
+
+  // itens divergentes
+  P.itens = [];
+  let totalPdf = null;
+  const ini = linhas.findIndex(l => /Listagem dos itens divergentes/i.test(l));
+  if(ini >= 0) for(const l of linhas.slice(ini)){
+    const s = l.trim().replace(/\s+/g, ' ');
+    const t = s.match(/^TOTAL:\s*(\d+)\s+(-?\d+)/i);
+    if(t){ totalPdf = { n: Number(t[1]), abs: Number(t[2]) }; continue; }
+    const m = s.match(/^(\d{4,14}) (?:(.*?) )?(-?\d+(?:[.,]\d+)?) (-?\d+(?:[.,]\d+)?) (-?\d+(?:[.,]\d+)?)$/);
+    if(m) P.itens.push({ codigo: m[1], descricao: (m[2] || '').trim(), contada: pNum(m[3]), estoque: pNum(m[4]), dif: pNum(m[5]) });
+  }
+  const somaAbs = P.itens.reduce((s, r) => s + Math.abs(r.dif), 0);
+  P.conferido = P.itens.length === P.codDiv && Math.round(somaAbs) === Math.round(P.qtdDiv ?? somaAbs)
+    && (!totalPdf || totalPdf.n === P.itens.length);
+  P.totalItens = P.codPrev;
+  P.itensOk = Math.min(P.totalItens, Math.max(0, Math.round(P.accSku / 100 * P.totalItens)));
+  return P;
+}
+/* PARSER-END */
+
+async function pdfLinhas(file){
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js';
+  const pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
+  const linhas = [];
+  for(let p = 1; p <= pdf.numPages; p++){
+    const tc = await (await pdf.getPage(p)).getTextContent();
+    const rows = [];
+    for(const it of tc.items){
+      if(!it.str || !it.str.trim()) continue;
+      const x = it.transform[4], y = it.transform[5];
+      let r = rows.find(r => Math.abs(r.y - y) < 3);
+      if(!r){ r = { y, items: [] }; rows.push(r); }
+      r.items.push({ x, s: it.str.trim() });
+    }
+    rows.sort((a, b) => b.y - a.y);
+    rows.forEach(r => linhas.push(r.items.sort((a, b) => a.x - b.x).map(i => i.s).join(' ')));
+  }
+  return linhas;
+}
+
+let PDFP = null;
+async function lerPdf(inp){
+  const f = inp.files[0]; inp.value = '';
+  if(!f) return;
+  if(typeof pdfjsLib === 'undefined') return alert('Não consegui carregar o leitor de PDF. Verifique a internet e tente de novo.');
+  try{
+    PDFP = parseEscolector(await pdfLinhas(f));
+    mostrarPreviewPdf(PDFP);
+  }catch(e){ alert('Não consegui ler o PDF: ' + (e.message || e)); }
+}
+
+const toks = s => new Set(String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').split(/[^a-z0-9]+/).filter(Boolean));
+function similar(a, b){
+  const A = toks(a), B = toks(b);
+  if(!A.size || !B.size) return 0;
+  let n = 0; A.forEach(x => { if(B.has(x)) n++; });
+  return n / Math.min(A.size, B.size);
+}
+function mostrarPreviewPdf(P){
+  let melhor = '__new', ms = 0.7;
+  lojas.forEach(l => { const sc = Math.max(similar(l.nome, P.filial), similar(l.nome, P.nome)); if(sc >= ms){ ms = sc; melhor = l.id; } });
+  const opts = lojas.map(l => `<option value="${l.id}" ${l.id === melhor ? 'selected' : ''}>${esc(l.nome)}</option>`).join('')
+    + `<option value="__new" ${melhor === '__new' ? 'selected' : ''}>➕ Criar loja “${esc(P.filial || P.nome)}”</option>`;
+  const avisos = [];
+  if(!P.conferido) avisos.push(`Os itens listados não batem com os totais do PDF (${P.itens.length} lidos, o PDF informa ${P.codDiv}). Confira antes de importar.`);
+  if(P.status && !/FINALIZADO/i.test(P.status)) avisos.push(`O PDF diz que o inventário está “${P.status}” no Escolector. Se a loja já terminou a contagem, pode importar normalmente.`);
+  $('#pdfBody').innerHTML = `
+    <h3>Importar do Escolector</h3>
+    <p class="muted">Inventário <b>${esc(P.nome)}</b> (#${esc(P.id || '?')})<br>
+      Filial no coletor: <b>${esc(P.filial || '-')}</b><br>
+      Contagem: ${P.inicio ? fmtData(P.inicio) : '-'} → ${P.fim ? fmtData(P.fim) : '-'}</p>
+    <div class="kpis">
+      <div class="kpi"><span>Acuracidade (códigos)</span><b>${fmtPct(P.accSku)}</b><small>${P.itensOk} de ${P.totalItens} códigos</small></div>
+      <div class="kpi"><span>Acurácia em quantidade</span><b>${P.accQtd === null ? '-' : fmtPct(P.accQtd)}</b></div>
+      <div class="kpi"><span>Falta</span><b class="neg">${brl(P.valorFalta)}</b></div>
+      <div class="kpi"><span>Sobra</span><b class="pos">${brl(P.valorSobra)}</b></div>
+    </div>
+    ${avisos.map(a => `<div class="warn">${esc(a)}</div>`).join('')}
+    <label>Loja</label>
+    <select id="pdfLoja">${opts}</select>
+    <label style="display:flex;gap:8px;align-items:flex-start;margin-bottom:12px">
+      <input type="checkbox" id="pdfMeta" checked style="width:auto;margin:4px 0 0">
+      <span>Conta para a meta de lojas inventariadas<br><span class="muted">Desmarque se for um inventário parcial (ex.: só uma marca).</span></span>
+    </label>
+    <div class="row">
+      <button onclick="$('#dPdf').close()">Cancelar</button>
+      <button class="p" onclick="confirmarPdf()">Importar</button>
+    </div>`;
+  $('#dPdf').showModal();
+}
+async function confirmarPdf(){
+  const P = PDFP; if(!P) return;
+  let lojaId = $('#pdfLoja').value;
+  const contaMeta = $('#pdfMeta').checked;
+  try{
+    if(lojaId === '__new'){
+      const r = await sb.from('lojas').insert({ nome: P.filial || P.nome }).select().single();
+      if(r.error) throw new Error(r.error.code === '23505' ? 'já existe uma loja com esse nome; escolha-a na lista.' : r.error.message);
+      lojaId = r.data.id;
+    }
+    if(P.id){
+      const ex = await sb.from('inventarios').select('id').eq('origem', 'escolector').eq('origem_id', P.id).maybeSingle();
+      if(ex.data){
+        if(!confirm(`O inventário #${P.id} já foi importado antes. Substituir pelo deste PDF?`)) return;
+        const d = await sb.from('inventarios').delete().eq('id', ex.data.id);
+        if(d.error) throw d.error;
+      }
+    }
+    const row = {
+      nome: P.nome, loja_id: lojaId, status: 'finalizado',
+      criado_em: P.inicio || new Date().toISOString(), inicio_contagem: P.inicio,
+      finalizado_em: P.fim || new Date().toISOString(),
+      total_itens: P.totalItens, itens_ok: P.itensOk,
+      valor_falta: P.valorFalta, valor_sobra: P.valorSobra, valor_estoque: P.valorPrev,
+      origem: 'escolector', origem_id: P.id, conta_meta: contaMeta,
+      codigos_previstos: P.codPrev, codigos_contados: P.codContados ?? 0,
+      qtd_prevista: P.qtdPrev ?? 0, qtd_contada: P.qtdContada ?? 0, valor_contado: P.valorContado ?? 0,
+      acuracia_qtd: P.accQtd, acuracia_sku: P.accSku
+    };
+    const r = await sb.from('inventarios').insert(row).select().single();
+    if(r.error) throw r.error;
+    for(let i = 0; i < P.itens.length; i += 500){
+      const lote = P.itens.slice(i, i + 500).map(x => ({ inventario_id: r.data.id, codigo: x.codigo, descricao: x.descricao || null, qtd_contada: x.contada, qtd_estoque: x.estoque, diferenca: x.dif }));
+      const d = await sb.from('inventario_divergencias').insert(lote);
+      if(d.error) throw d.error;
+    }
+    $('#dPdf').close(); PDFP = null;
+    await loadAll(); aba('tInv'); verRel(r.data.id);
+  }catch(e){ alert('Erro ao importar: ' + (e.message || e) + '\n\n(Você rodou o schema_v3.sql no Supabase?)'); }
+}
+async function verRelPdf(inv){
+  let ds;
+  try{
+    ds = await fetchAll(() => sb.from('inventario_divergencias').select('codigo,descricao,qtd_contada,qtd_estoque,diferenca').eq('inventario_id', inv.id).order('id'));
+  }catch(e){ return alert(e.message); }
+  ds.sort((a, b) => Math.abs(b.diferenca) - Math.abs(a.diferenca));
+  const nomeDe = d => d.descricao || eanMap.get(d.codigo)?.nome || '';
+  relRows = ds.map(d => [d.codigo, nomeDe(d), d.qtd_contada, d.qtd_estoque, d.diferenca]);
+  const falta = Number(inv.valor_falta), sobra = Number(inv.valor_sobra);
+  $('#rel').innerHTML = `<div class="card scroll">
+    <h3>${esc(inv.lojas?.nome || '-')} — ${esc(inv.nome)}</h3>
+    <p class="muted">Importado do Escolector (#${esc(inv.origem_id || '?')}) · contagem finalizada em ${fmtData(inv.finalizado_em)}${inv.conta_meta === false ? ' · <span class="tag">parcial</span>' : ''}</p>
+    <div class="kpis">
+      <div class="kpi"><span>Acuracidade (códigos)</span><b>${pct(inv.itens_ok, inv.total_itens)}</b><small>${inv.itens_ok} de ${inv.total_itens} códigos previstos corretos</small></div>
+      <div class="kpi"><span>Acurácia em quantidade</span><b>${inv.acuracia_qtd === null ? '-' : fmtPct(inv.acuracia_qtd)}</b><small>${num(inv.qtd_contada)} contadas de ${num(inv.qtd_prevista)} previstas</small></div>
+      <div class="kpi"><span>Falta</span><b class="neg">${brl(falta)}</b></div>
+      <div class="kpi"><span>Sobra</span><b class="pos">${brl(sobra)}</b></div>
+      <div class="kpi"><span>Divergência líquida</span><b class="${falta + sobra < 0 ? 'neg' : 'pos'}">${brl(falta + sobra)}</b><small>${pct(Math.abs(falta) + sobra, Number(inv.valor_estoque))} do estoque previsto</small></div>
+      <div class="kpi"><span>Estoque previsto (custo)</span><b>${brl(inv.valor_estoque)}</b><small>contado: ${brl(inv.valor_contado)}</small></div>
+    </div>
+    <table><thead><tr><th>Item divergente</th><th class="n">Cont.</th><th class="n">Est.</th><th class="n">Dif.</th></tr></thead><tbody>
+    ${ds.slice(0, 300).map(d => `<tr><td>${esc(nomeDe(d) || d.codigo)}<div class="muted">${esc(d.codigo)}</div></td>
+      <td class="n">${num(d.qtd_contada)}</td><td class="n">${num(d.qtd_estoque)}</td>
+      <td class="n ${d.diferenca < 0 ? 'neg' : 'pos'}">${d.diferenca > 0 ? '+' : ''}${num(d.diferenca)}</td></tr>`).join('')
+      || '<tr><td colspan="4" class="muted">Nenhuma divergência. 🎉</td></tr>'}
+    </tbody></table>
+    ${ds.length > 300 ? `<p class="muted">Mostrando 300 de ${ds.length}. Exporte o CSV para ver todas.</p>` : ''}
+    <div class="row noprint" style="margin-top:10px">
+      <button onclick="baixarCsv('${esc((inv.lojas?.nome || 'loja').replace(/[^\w]+/g, '_'))}', ['ean','produto','contado','estoque','diferenca'])">⬇ Exportar CSV</button>
+      <button class="d" onclick="excluirInv('${inv.id}')">🗑 Excluir</button>
+    </div>
+  </div>`;
+  $('#rel').scrollIntoView({ behavior:'smooth' });
+}
+async function excluirInv(id){
+  if(!confirm('Excluir este inventário e todo o resultado dele? Não dá para desfazer.')) return;
+  const r = await sb.from('inventarios').delete().eq('id', id);
+  if(r.error) return alert(r.error.message);
+  $('#rel').innerHTML = ''; estRows = null; await loadAll();
 }
 
 start();
