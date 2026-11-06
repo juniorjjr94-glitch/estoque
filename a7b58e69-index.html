@@ -1,0 +1,725 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#1f6feb">
+<title>Gestão de Estoque</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://unpkg.com/html5-qrcode"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<style>
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#f4f6f8;color:#1b1f24}
+  header{background:#1f6feb;color:#fff;padding:12px 16px;display:flex;justify-content:space-between;align-items:center}
+  header h1{font-size:18px;margin:0}
+  nav{display:flex;background:#fff;border-bottom:1px solid #dde2e8;position:sticky;top:0;z-index:5;overflow-x:auto}
+  nav button{flex:1 0 auto;padding:12px 10px;border:0;border-radius:0;background:none;font-size:13px;border-bottom:3px solid transparent;color:#57606a;white-space:nowrap}
+  nav button.on{color:#1f6feb;border-color:#1f6feb;font-weight:600}
+  main,.box{max-width:900px;margin:0 auto;padding:14px}
+  .card{background:#fff;border:1px solid #dde2e8;border-radius:10px;padding:12px;margin-bottom:12px}
+  .card h3{margin:0 0 8px;font-size:15px}
+  input,select,textarea{width:100%;padding:11px;border:1px solid #c5ccd3;border-radius:8px;font-size:16px;margin:4px 0 10px;background:#fff;font-family:inherit}
+  button{font-size:15px;border-radius:8px;border:1px solid #c5ccd3;background:#fff;padding:10px 14px;cursor:pointer}
+  button.p{background:#1f6feb;border-color:#1f6feb;color:#fff}
+  button.d{color:#cf222e}
+  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .row>*{flex:1}
+  .row>button{flex:0 0 auto}
+  table{width:100%;border-collapse:collapse;font-size:14px}
+  th,td{padding:8px 6px;border-bottom:1px solid #eaeef2;text-align:left}
+  td.n,th.n{text-align:right}
+  .neg{color:#cf222e;font-weight:600}.pos{color:#1a7f37;font-weight:600}
+  .muted{color:#6e7781;font-size:13px}
+  dialog{border:0;border-radius:12px;padding:16px;width:min(92vw,420px)}
+  dialog::backdrop{background:rgba(0,0,0,.4)}
+  #scanOv{position:fixed;inset:0;background:#000d;z-index:50;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:16px}
+  #reader{width:min(92vw,420px);background:#000}
+  [hidden]{display:none!important}
+  .scroll{overflow-x:auto}
+  .kpis{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px}
+  .kpi{background:#fff;border:1px solid #dde2e8;border-radius:10px;padding:12px}
+  .kpi span{display:block;font-size:12px;color:#6e7781}
+  .kpi b{font-size:22px}
+  .kpi small{display:block;font-size:12px;color:#6e7781;margin-top:2px}
+  .prog{background:#eaeef2;border-radius:8px;height:16px;overflow:hidden;margin:8px 0}
+  .prog>div{background:#1a7f37;height:100%}
+  .chart{display:flex;gap:6px;align-items:flex-end}
+  .col{flex:1;text-align:center;font-size:12px}
+  .cv{position:relative;height:120px;display:flex;align-items:flex-end}
+  .cb{width:100%;background:#c5ccd3;border-radius:4px 4px 0 0;min-height:0}
+  .cb.ok{background:#1a7f37}.cb.mid{background:#d4a72c}
+  .mk{position:absolute;left:-3px;right:-3px;border-top:2px dashed #cf222e}
+  .cn{font-weight:600;margin-top:2px}.cm{color:#6e7781}
+  .tag{display:inline-block;padding:2px 8px;border-radius:10px;font-size:12px;background:#eaeef2}
+  .tag.ok{background:#dafbe1;color:#1a7f37}.tag.run{background:#fff8c5;color:#7d4e00}
+  @media print{
+    nav,header,.noprint,button{display:none!important}
+    body{background:#fff}
+    .card,.kpi{break-inside:avoid;border-color:#bbb}
+    main{max-width:none;padding:0}
+  }
+</style>
+</head>
+<body>
+
+<!-- CONFIGURAÇÃO -->
+<section id="setup" hidden><div class="box">
+  <h2>Configurar</h2>
+  <p class="muted">Use apenas a chave pública (anon / publishable). Nunca use a service_role.</p>
+  <label>URL do projeto Supabase</label>
+  <input id="cfgUrl" placeholder="https://xxxx.supabase.co">
+  <label>Chave pública (anon / publishable)</label>
+  <input id="cfgKey" placeholder="cole aqui a chave pública">
+  <button class="p" onclick="saveCfg()">Salvar</button>
+</div></section>
+
+<!-- LOGIN -->
+<section id="login" hidden><div class="box">
+  <h2>Entrar</h2>
+  <input id="email" type="email" placeholder="E-mail" autocomplete="username">
+  <input id="senha" type="password" placeholder="Senha (mín. 6 caracteres)" autocomplete="current-password">
+  <div class="row">
+    <button class="p" onclick="doLogin()">Entrar</button>
+    <button onclick="doSignup()">Criar conta</button>
+  </div>
+  <p><button onclick="resetCfg()" class="muted">Trocar configuração</button></p>
+</div></section>
+
+<!-- APP -->
+<section id="app" hidden>
+  <header><h1>📦 Gestão de Estoque</h1><button onclick="logout()">Sair</button></header>
+  <nav>
+    <button data-t="tDash" class="on">Dashboard</button>
+    <button data-t="tLojas">Lojas</button>
+    <button data-t="tProd">Produtos</button>
+    <button data-t="tCont">Contagem</button>
+    <button data-t="tInv">Inventários</button>
+  </nav>
+
+  <!-- DASHBOARD -->
+  <main id="tDash">
+    <div class="row noprint">
+      <input type="month" id="dMes" onchange="renderDash()">
+      <button onclick="alterarMeta()">🎯 Meta: <span id="metaTxt">5</span>/mês</button>
+      <button onclick="window.print()">🖨 PDF</button>
+    </div>
+    <div id="dash"></div>
+  </main>
+
+  <!-- LOJAS -->
+  <main id="tLojas" hidden>
+    <div class="row" style="margin-bottom:10px">
+      <button class="p" onclick="$('#lojasTxt').value='';$('#dLojas').showModal()">+ Lojas</button>
+    </div>
+    <div class="card scroll"><table>
+      <thead><tr><th>Loja</th><th></th></tr></thead>
+      <tbody id="listaLojas"></tbody>
+    </table></div>
+    <p class="muted">📥 envia a planilha de estoque daquela loja (colunas: marca, produto, ean, estoque, custo).</p>
+    <input type="file" id="arq" accept=".xlsx,.xls,.csv" hidden onchange="importar(this)">
+  </main>
+
+  <!-- PRODUTOS -->
+  <main id="tProd" hidden>
+    <div class="row">
+      <select id="pLoja" onchange="trocarLojaProd()"></select>
+      <button class="p" onclick="novoProduto()">+ Produto</button>
+    </div>
+    <div class="kpis" style="margin-top:10px">
+      <div class="kpi"><span id="kA">Produtos</span><b id="totItens">0</b></div>
+      <div class="kpi"><span>Valor em estoque (custo)</span><b id="totValor">-</b></div>
+    </div>
+    <input id="q" placeholder="Buscar por nome, marca ou código" oninput="renderProdutos()">
+    <div class="card scroll"><table>
+      <thead><tr><th>Produto</th><th class="n" id="thC">Custo</th><th class="n" id="thE">Estoque</th></tr></thead>
+      <tbody id="listaProd"></tbody>
+    </table></div>
+  </main>
+
+  <!-- CONTAGEM -->
+  <main id="tCont" hidden>
+    <div class="card">
+      <label>Inventário aberto</label>
+      <div class="row">
+        <select id="invSel" onchange="selInv()"></select>
+        <button onclick="abrirNovoInv()">+ Novo</button>
+      </div>
+      <div id="contForm" hidden>
+        <label>Código de barras (EAN)</label>
+        <div class="row">
+          <input id="cod" inputmode="numeric" placeholder="Digite ou escaneie" onkeydown="if(event.key==='Enter')addContagem()">
+          <button onclick="scan(c=>{$('#cod').value=c;addContagem()})">📷 Escanear</button>
+        </div>
+        <label>Quantidade a somar</label>
+        <input id="qtd" type="number" step="any" value="1">
+        <button class="p" onclick="addContagem()" style="width:100%">Adicionar contagem</button>
+        <p id="ultimo" class="muted"></p>
+      </div>
+    </div>
+    <div class="card scroll" id="contLista" hidden>
+      <div class="muted" id="contInfo"></div>
+      <table>
+        <thead><tr><th>Produto</th><th class="n">Contado</th><th></th></tr></thead>
+        <tbody id="listaCont"></tbody>
+      </table>
+    </div>
+  </main>
+
+  <!-- INVENTÁRIOS -->
+  <main id="tInv" hidden>
+    <div class="row" style="margin-bottom:10px">
+      <button class="p" onclick="abrirNovoInv()">+ Novo inventário</button>
+    </div>
+    <div class="card scroll"><table>
+      <thead><tr><th>Loja</th><th>Status</th><th class="n">Acerto</th><th></th></tr></thead>
+      <tbody id="listaInv"></tbody>
+    </table></div>
+    <div id="rel"></div>
+  </main>
+</section>
+
+<dialog id="dProd">
+  <h3 id="dTitulo">Produto</h3>
+  <input type="hidden" id="pId">
+  <label>Código de barras (EAN)</label>
+  <div class="row">
+    <input id="pCod" inputmode="numeric">
+    <button onclick="scan(c=>$('#pCod').value=c)">📷</button>
+  </div>
+  <label>Marca</label><input id="pMarca">
+  <label>Nome</label><input id="pNome">
+  <label>Custo padrão (R$)</label><input id="pCusto" type="number" step="0.01" value="0">
+  <div class="row">
+    <button onclick="$('#dProd').close()">Cancelar</button>
+    <button class="p" onclick="salvarProduto()">Salvar</button>
+  </div>
+</dialog>
+
+<dialog id="dLojas">
+  <h3>Adicionar lojas</h3>
+  <p class="muted">Uma loja por linha. Pode colar a lista toda de uma vez.</p>
+  <textarea id="lojasTxt" rows="8" placeholder="Loja Centro&#10;Loja Shopping&#10;..."></textarea>
+  <div class="row">
+    <button onclick="$('#dLojas').close()">Cancelar</button>
+    <button class="p" onclick="salvarLojas()">Salvar</button>
+  </div>
+</dialog>
+
+<dialog id="dInv">
+  <h3>Novo inventário</h3>
+  <label>Loja</label>
+  <select id="invLoja"></select>
+  <div class="row">
+    <button onclick="$('#dInv').close()">Cancelar</button>
+    <button class="p" onclick="criarInv()">Criar</button>
+  </div>
+</dialog>
+
+<div id="scanOv" hidden>
+  <div id="reader"></div>
+  <button onclick="stopScan()">Fechar</button>
+</div>
+
+<script>
+const DEFAULT_URL = 'https://hacwqnmynmvrjijhxuou.supabase.co';
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const brl = n => Number(n || 0).toLocaleString('pt-BR', {style:'currency', currency:'BRL'});
+const num = n => Number(n || 0).toLocaleString('pt-BR', {maximumFractionDigits:3});
+const pct = (a, b) => b > 0 ? (a / b * 100).toFixed(1).replace('.', ',') + '%' : '-';
+const fmtData = d => d ? new Date(d).toLocaleDateString('pt-BR') : '-';
+const MESES = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
+const ym = d => { const x = new Date(d); return x.getFullYear() + '-' + String(x.getMonth() + 1).padStart(2, '0'); };
+let sb, lojas = [], produtos = [], invs = [], eanMap = new Map(), invId = null, scanner = null;
+let meta = 5, importLoja = null, estRows = null, relRows = [];
+
+function show(id){ ['setup','login','app'].forEach(v => $('#'+v).hidden = v !== id); }
+
+/* O Supabase devolve no máximo 1000 linhas por consulta: busca em páginas */
+async function fetchAll(mk){
+  let all = [], from = 0;
+  while(true){
+    const { data, error } = await mk().range(from, from + 999);
+    if(error) throw error;
+    all = all.concat(data);
+    if(data.length < 1000) break;
+    from += 1000;
+  }
+  return all;
+}
+
+/* ---------- Início / config / login ---------- */
+async function start(){
+  const url = localStorage.sb_url, key = localStorage.sb_key;
+  if(!url || !key){ $('#cfgUrl').value = url || DEFAULT_URL; return show('setup'); }
+  sb = supabase.createClient(url, key);
+  const { data } = await sb.auth.getSession();
+  if(data.session){ show('app'); await loadAll(); } else show('login');
+}
+function saveCfg(){
+  const u = $('#cfgUrl').value.trim(), k = $('#cfgKey').value.trim();
+  if(!u || !k) return alert('Preencha os dois campos.');
+  localStorage.sb_url = u; localStorage.sb_key = k; start();
+}
+function resetCfg(){ localStorage.removeItem('sb_key'); start(); }
+async function doLogin(){
+  const { error } = await sb.auth.signInWithPassword({ email:$('#email').value.trim(), password:$('#senha').value });
+  if(error) return alert('Erro ao entrar: ' + error.message);
+  start();
+}
+async function doSignup(){
+  const { data, error } = await sb.auth.signUp({ email:$('#email').value.trim(), password:$('#senha').value });
+  if(error) return alert('Erro: ' + error.message);
+  if(!data.session) alert('Conta criada. Se o Supabase pedir confirmação, confirme pelo e-mail e depois entre.');
+  else start();
+}
+async function logout(){ await sb.auth.signOut(); start(); }
+
+/* ---------- Abas ---------- */
+function aba(t){
+  document.querySelectorAll('nav button').forEach(x => x.classList.toggle('on', x.dataset.t === t));
+  ['tDash','tLojas','tProd','tCont','tInv'].forEach(id => $('#'+id).hidden = id !== t);
+  if(t === 'tDash') renderDash();
+  if(t === 'tCont') renderContagem();
+  if(t === 'tInv') renderInvs();
+  window.scrollTo(0, 0);
+}
+document.querySelectorAll('nav button').forEach(b => b.onclick = () => aba(b.dataset.t));
+
+/* ---------- Dados ---------- */
+async function loadAll(){
+  try{
+    const [p, l, i] = await Promise.all([
+      fetchAll(() => sb.from('produtos').select('id,codigo_barras,marca,nome,custo').order('nome').order('id')),
+      sb.from('lojas').select('*').order('nome'),
+      sb.from('inventarios').select('*, lojas(nome)').order('criado_em', {ascending:false})
+    ]);
+    if(l.error) throw l.error;
+    if(i.error) throw i.error;
+    produtos = p; lojas = l.data; invs = i.data;
+    eanMap = new Map(produtos.filter(x => x.codigo_barras).map(x => [x.codigo_barras, x]));
+    const c = await sb.from('config').select('valor').eq('chave', 'meta_mensal').maybeSingle();
+    meta = c.data ? (Number(c.data.valor) || 5) : 5;
+  }catch(e){
+    return alert('Erro ao carregar: ' + (e.message || e) + '\n\n(Você rodou o schema_v2.sql no Supabase?)');
+  }
+  if(!$('#dMes').value) $('#dMes').value = ym(new Date());
+  renderAll();
+}
+function renderAll(){
+  $('#metaTxt').textContent = meta;
+  renderLojaSelects(); renderDash(); renderLojas(); renderProdutos(); renderInvSel(); renderInvs();
+}
+function renderLojaSelects(){
+  const cur = $('#pLoja').value;
+  $('#pLoja').innerHTML = '<option value="">Catálogo (todos os produtos)</option>' +
+    lojas.map(l => `<option value="${l.id}">Estoque: ${esc(l.nome)}</option>`).join('');
+  $('#pLoja').value = lojas.find(l => l.id === cur) ? cur : '';
+  $('#invLoja').innerHTML = lojas.map(l => `<option value="${l.id}">${esc(l.nome)}</option>`).join('');
+}
+
+/* ---------- Dashboard (diretoria) ---------- */
+function barras(itens){ return itens; }
+function renderDash(){
+  const el = $('#dash'); if(!el) return;
+  const mesSel = $('#dMes').value || ym(new Date());
+  const ano = mesSel.slice(0, 4);
+  const mesNome = new Date(mesSel + '-02').toLocaleDateString('pt-BR', { month:'long', year:'numeric' });
+  const soma = (arr, k) => arr.reduce((s, i) => s + Number(i[k] || 0), 0);
+
+  const fin = invs.filter(i => i.status === 'finalizado' && i.finalizado_em && i.loja_id);
+  const doMes = fin.filter(i => ym(i.finalizado_em) === mesSel);
+  const lojasMes = new Set(doMes.map(i => i.loja_id)).size;
+  const doAno = fin.filter(i => ym(i.finalizado_em).startsWith(ano));
+  const lojasAno = new Set(doAno.map(i => i.loja_id));
+  const pendentes = lojas.filter(l => !lojasAno.has(l.id));
+  const abertos = invs.filter(i => i.status === 'aberto').length;
+
+  const falta = soma(doMes, 'valor_falta'), sobra = soma(doMes, 'valor_sobra'), vest = soma(doMes, 'valor_estoque');
+  const accMes = pct(soma(doMes, 'itens_ok'), soma(doMes, 'total_itens'));
+  const accAno = pct(soma(doAno, 'itens_ok'), soma(doAno, 'total_itens'));
+  const pctMeta = meta > 0 ? Math.min(100, lojasMes / meta * 100) : 0;
+
+  const porMes = Array.from({length:12}, (_, m) => {
+    const k = ano + '-' + String(m + 1).padStart(2, '0');
+    return new Set(fin.filter(i => ym(i.finalizado_em) === k).map(i => i.loja_id)).size;
+  });
+  const max = Math.max(meta, ...porMes, 1);
+  const cols = porMes.map((n, m) => `<div class="col"><div class="cv">
+      <div class="cb ${n >= meta ? 'ok' : n > 0 ? 'mid' : ''}" style="height:${n / max * 100}%"></div>
+      <i class="mk" style="bottom:${meta / max * 100}%"></i></div>
+      <div class="cn">${n}</div><div class="cm">${MESES[m]}</div></div>`).join('');
+
+  // pior acuracidade: último inventário de cada loja no ano
+  const ult = new Map();
+  doAno.forEach(i => { const a = ult.get(i.loja_id); if(!a || new Date(i.finalizado_em) > new Date(a.finalizado_em)) ult.set(i.loja_id, i); });
+  const rank = [...ult.values()].filter(i => i.total_itens > 0)
+    .sort((a, b) => a.itens_ok / a.total_itens - b.itens_ok / b.total_itens).slice(0, 5);
+
+  const linhasMes = doMes.sort((a, b) => new Date(a.finalizado_em) - new Date(b.finalizado_em)).map(i => `<tr>
+      <td>${esc(i.lojas?.nome || '-')}<div class="muted">${fmtData(i.finalizado_em)}</div></td>
+      <td class="n">${pct(i.itens_ok, i.total_itens)}</td>
+      <td class="n neg">${brl(i.valor_falta)}</td><td class="n pos">${brl(i.valor_sobra)}</td></tr>`).join('');
+
+  el.innerHTML = `
+    <h2 style="margin:6px 0 12px;text-transform:capitalize">Relatório de inventários — ${mesNome}</h2>
+    <div class="card">
+      <h3>Meta do mês</h3>
+      <div style="font-size:28px;font-weight:700">${lojasMes} <span class="muted" style="font-size:16px">de ${meta} lojas inventariadas</span></div>
+      <div class="prog"><div style="width:${pctMeta}%;${lojasMes >= meta ? '' : 'background:#d4a72c'}"></div></div>
+      <div class="muted">${lojasMes >= meta ? '✅ Meta atingida' : 'Faltam ' + (meta - lojasMes) + ' loja(s) para a meta'}</div>
+    </div>
+    <div class="kpis">
+      <div class="kpi"><span>Acuracidade do mês</span><b>${accMes}</b><small>itens sem divergência</small></div>
+      <div class="kpi"><span>Acuracidade no ano</span><b>${accAno}</b><small>${doAno.length} inventário(s) em ${ano}</small></div>
+      <div class="kpi"><span>Falta (custo) no mês</span><b class="neg">${brl(falta)}</b></div>
+      <div class="kpi"><span>Sobra (custo) no mês</span><b class="pos">${brl(sobra)}</b></div>
+      <div class="kpi"><span>Divergência líquida</span><b class="${falta + sobra < 0 ? 'neg' : 'pos'}">${brl(falta + sobra)}</b><small>${pct(Math.abs(falta) + sobra, vest)} do estoque contado</small></div>
+      <div class="kpi"><span>Lojas cadastradas</span><b>${lojas.length}</b><small>${abertos} inventário(s) em andamento</small></div>
+    </div>
+    <div class="card">
+      <h3>Lojas inventariadas por mês — ${ano}</h3>
+      <div class="chart">${cols}</div>
+      <p class="muted">Linha vermelha tracejada = meta (${meta}). Verde = meta atingida.</p>
+    </div>
+    <div class="card scroll">
+      <h3>Inventários finalizados no mês</h3>
+      ${linhasMes ? `<table><thead><tr><th>Loja</th><th class="n">Acerto</th><th class="n">Falta</th><th class="n">Sobra</th></tr></thead><tbody>${linhasMes}</tbody></table>` : '<p class="muted">Nenhum inventário finalizado neste mês.</p>'}
+    </div>
+    <div class="card scroll">
+      <h3>Menor acuracidade em ${ano} (último inventário de cada loja)</h3>
+      ${rank.length ? `<table><tbody>${rank.map(i => `<tr><td>${esc(i.lojas?.nome || '-')}<div class="muted">${fmtData(i.finalizado_em)}</div></td><td class="n"><b>${pct(i.itens_ok, i.total_itens)}</b></td></tr>`).join('')}</tbody></table>` : '<p class="muted">Sem dados ainda.</p>'}
+    </div>
+    <div class="card">
+      <h3>Lojas ainda não inventariadas em ${ano} (${pendentes.length})</h3>
+      ${pendentes.length ? pendentes.map(l => `<span class="tag">${esc(l.nome)}</span> `).join('') : '<p class="muted">Todas as lojas já foram inventariadas. 🎉</p>'}
+    </div>`;
+}
+async function alterarMeta(){
+  const v = prompt('Meta de lojas inventariadas por mês:', meta);
+  if(v === null) return;
+  const n = parseInt(v, 10);
+  if(!(n > 0)) return alert('Informe um número maior que zero.');
+  const r = await sb.from('config').upsert({ chave:'meta_mensal', valor:String(n) });
+  if(r.error) return alert(r.error.message);
+  meta = n; $('#metaTxt').textContent = n; renderDash();
+}
+
+/* ---------- Lojas ---------- */
+function renderLojas(){
+  $('#listaLojas').innerHTML = lojas.map(l => {
+    const u = invs.filter(i => i.loja_id === l.id && i.status === 'finalizado')
+      .sort((a, b) => new Date(b.finalizado_em) - new Date(a.finalizado_em))[0];
+    return `<tr><td>${esc(l.nome)}<div class="muted">${u ? 'Último inventário: ' + fmtData(u.finalizado_em) + ' · acerto ' + pct(u.itens_ok, u.total_itens) : 'Nunca inventariada'}</div></td>
+      <td class="n"><button onclick="pedirEstoque('${l.id}')">📥</button> <button onclick="renomearLoja('${l.id}')">✏️</button> <button class="d" onclick="excluirLoja('${l.id}')">🗑</button></td></tr>`;
+  }).join('') || '<tr><td colspan="2" class="muted">Nenhuma loja cadastrada. Toque em "+ Lojas".</td></tr>';
+}
+async function salvarLojas(){
+  const nomes = [...new Set($('#lojasTxt').value.split('\n').map(s => s.trim()).filter(Boolean))];
+  if(!nomes.length) return alert('Digite pelo menos uma loja.');
+  const r = await sb.from('lojas').upsert(nomes.map(nome => ({ nome })), { onConflict:'nome', ignoreDuplicates:true });
+  if(r.error) return alert(r.error.message);
+  $('#dLojas').close(); await loadAll();
+}
+async function renomearLoja(id){
+  const l = lojas.find(x => x.id === id);
+  const n = prompt('Novo nome da loja:', l.nome);
+  if(!n || !n.trim()) return;
+  const r = await sb.from('lojas').update({ nome:n.trim() }).eq('id', id);
+  if(r.error) return alert(r.error.message);
+  loadAll();
+}
+async function excluirLoja(id){
+  if(!confirm('Excluir esta loja e o estoque dela?')) return;
+  const r = await sb.from('lojas').delete().eq('id', id);
+  if(r.error) return alert(r.error.code === '23503' ? 'Esta loja tem inventários e não pode ser excluída.' : r.error.message);
+  loadAll();
+}
+
+/* ---------- Produtos ---------- */
+async function trocarLojaProd(){
+  const id = $('#pLoja').value;
+  estRows = null;
+  if(id){
+    try{
+      estRows = await fetchAll(() => sb.from('estoque_loja').select('produto_id,quantidade,custo,produtos(nome,marca,codigo_barras)').eq('loja_id', id).order('produto_id'));
+    }catch(e){ return alert(e.message); }
+  }
+  renderProdutos();
+}
+function renderProdutos(){
+  const q = $('#q').value.trim().toLowerCase();
+  const casa = p => !q || (p.nome || '').toLowerCase().includes(q) || (p.marca || '').toLowerCase().includes(q) || (p.codigo_barras || '').includes(q);
+  const lojaSel = $('#pLoja').value;
+  let html = '', total = 0;
+  if(lojaSel && estRows){
+    const lista = estRows.filter(r => casa(r.produtos));
+    $('#kA').textContent = 'Itens na loja';
+    $('#totItens').textContent = estRows.length;
+    $('#totValor').textContent = brl(estRows.reduce((s, r) => s + Number(r.quantidade) * Number(r.custo), 0));
+    $('#thC').textContent = 'Custo'; $('#thE').textContent = 'Estoque';
+    total = lista.length;
+    html = lista.slice(0, 200).map(r => `<tr><td>${esc(r.produtos.nome)}<div class="muted">${esc([r.produtos.marca, r.produtos.codigo_barras].filter(Boolean).join(' · '))}</div></td>
+      <td class="n">${brl(r.custo)}</td><td class="n">${num(r.quantidade)}</td></tr>`).join('');
+  } else {
+    const lista = produtos.filter(casa);
+    $('#kA').textContent = 'Produtos no catálogo';
+    $('#totItens').textContent = produtos.length;
+    $('#totValor').textContent = '-';
+    $('#thC').textContent = 'Custo padrão'; $('#thE').textContent = '';
+    total = lista.length;
+    html = lista.slice(0, 200).map(p => `<tr><td>${esc(p.nome)}<div class="muted">${esc([p.marca, p.codigo_barras || 'sem código'].filter(Boolean).join(' · '))}</div></td>
+      <td class="n">${brl(p.custo)}</td>
+      <td class="n"><button onclick="editarProduto('${p.id}')">✏️</button> <button class="d" onclick="excluirProduto('${p.id}')">🗑</button></td></tr>`).join('');
+  }
+  if(total > 200) html += `<tr><td colspan="3" class="muted">Mostrando 200 de ${total}. Use a busca para achar os outros.</td></tr>`;
+  $('#listaProd').innerHTML = html || '<tr><td colspan="3" class="muted">Nenhum produto.</td></tr>';
+}
+function abrirDlg(p = {}){
+  $('#dTitulo').textContent = p.id ? 'Editar produto' : 'Novo produto';
+  $('#pId').value = p.id || ''; $('#pCod').value = p.codigo_barras || '';
+  $('#pMarca').value = p.marca || ''; $('#pNome').value = p.nome || ''; $('#pCusto').value = p.custo ?? 0;
+  $('#dProd').showModal();
+}
+function novoProduto(cod = ''){ abrirDlg({ codigo_barras: cod }); }
+function editarProduto(id){ abrirDlg(produtos.find(p => p.id === id)); }
+async function salvarProduto(){
+  const row = {
+    codigo_barras: $('#pCod').value.trim() || null,
+    marca: $('#pMarca').value.trim() || null,
+    nome: $('#pNome').value.trim(),
+    custo: parseFloat($('#pCusto').value) || 0
+  };
+  if(!row.nome) return alert('Informe o nome.');
+  const id = $('#pId').value;
+  const r = id ? await sb.from('produtos').update(row).eq('id', id) : await sb.from('produtos').insert(row);
+  if(r.error) return alert('Erro: ' + (r.error.code === '23505' ? 'esse código de barras já existe.' : r.error.message));
+  $('#dProd').close(); await loadAll();
+}
+async function excluirProduto(id){
+  if(!confirm('Excluir este produto do catálogo? Estoque e contagens dele também serão apagados.')) return;
+  const r = await sb.from('produtos').delete().eq('id', id);
+  if(r.error) return alert(r.error.message);
+  loadAll();
+}
+
+/* ---------- Scanner ---------- */
+function scan(cb){
+  $('#scanOv').hidden = false;
+  scanner = new Html5Qrcode('reader');
+  scanner.start({ facingMode:'environment' }, { fps:10, qrbox:{ width:260, height:140 } },
+    async txt => { await stopScan(); cb(txt); }, () => {})
+    .catch(e => { stopScan(); alert('Não consegui abrir a câmera (precisa de HTTPS e permissão): ' + e); });
+}
+async function stopScan(){
+  try{ if(scanner){ await scanner.stop(); scanner.clear(); } }catch(e){}
+  scanner = null; $('#scanOv').hidden = true;
+}
+
+/* ---------- Importar planilha de estoque da loja ---------- */
+const norm = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '');
+const toNum = v => {
+  if(typeof v === 'number') return v;
+  let s = String(v ?? '').replace(/[^0-9,.\-]/g, '');
+  if(!s) return 0;
+  if(s.includes(',')) s = s.replace(/\./g, '').replace(',', '.');
+  return parseFloat(s) || 0;
+};
+function pedirEstoque(id){ importLoja = id; $('#arq').click(); }
+async function importar(inp){
+  const f = inp.files[0]; inp.value = '';
+  if(!f || !importLoja) return;
+  const loja = lojas.find(l => l.id === importLoja);
+  try{
+    const wb = XLSX.read(await f.arrayBuffer(), { type:'array' });
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval:'' });
+    const alias = {
+      marca:['marca','fabricante'],
+      nome:['produto','nome','descricao','item'],
+      ean:['ean','codigodebarras','codigobarras','gtin','codigo','barras'],
+      estoque:['estoque','quantidade','qtd','qtde','saldo'],
+      custo:['custo','precodecusto','valorcusto','precocusto']
+    };
+    const get = (r, k) => { for(const key of Object.keys(r)) if(alias[k].includes(norm(key))) return r[key]; return ''; };
+    const porEan = new Map(); let semEan = 0;
+    for(const r of rows){
+      const nome = String(get(r, 'nome')).trim();
+      if(!nome) continue;
+      const ean = String(get(r, 'ean')).trim().replace(/\.0$/, '');
+      if(!ean){ semEan++; continue; }
+      porEan.set(ean, { ean, nome, marca: String(get(r, 'marca')).trim() || null, estoque: toNum(get(r, 'estoque')), custo: toNum(get(r, 'custo')) });
+    }
+    const lista = [...porEan.values()];
+    if(!lista.length) return alert('Não encontrei linhas válidas. Confira os títulos da 1ª linha: marca, produto, ean, estoque, custo.');
+    if(!confirm(`Importar ${lista.length} produtos para "${loja.nome}"?` + (semEan ? `\n(${semEan} linhas sem EAN serão ignoradas)` : ''))) return;
+    const substituir = confirm('Substituir TODO o estoque atual desta loja pelo da planilha?\n\nOK = substituir (o que não está na planilha sai do estoque)\nCancelar = só atualizar e adicionar');
+
+    const ids = new Map();
+    for(let i = 0; i < lista.length; i += 500){
+      const lote = lista.slice(i, i + 500).map(x => ({ codigo_barras:x.ean, marca:x.marca, nome:x.nome, custo:x.custo }));
+      const r = await sb.from('produtos').upsert(lote, { onConflict:'codigo_barras' }).select('id,codigo_barras');
+      if(r.error) throw r.error;
+      r.data.forEach(p => ids.set(p.codigo_barras, p.id));
+    }
+    if(substituir){
+      const d = await sb.from('estoque_loja').delete().eq('loja_id', loja.id);
+      if(d.error) throw d.error;
+    }
+    for(let i = 0; i < lista.length; i += 500){
+      const lote = lista.slice(i, i + 500).map(x => ({ loja_id:loja.id, produto_id:ids.get(x.ean), quantidade:x.estoque, custo:x.custo }));
+      const r = await sb.from('estoque_loja').upsert(lote, { onConflict:'loja_id,produto_id' });
+      if(r.error) throw r.error;
+    }
+    alert(`Estoque de "${loja.nome}" importado: ${lista.length} produtos.`);
+    estRows = null; await loadAll(); trocarLojaProd();
+  }catch(e){ alert('Erro na importação: ' + (e.message || e)); }
+}
+
+/* ---------- Inventários: criar ---------- */
+function abrirNovoInv(){
+  if(!lojas.length) return alert('Cadastre as lojas primeiro (aba Lojas).');
+  $('#dInv').showModal();
+}
+async function criarInv(){
+  const lojaId = $('#invLoja').value;
+  const loja = lojas.find(l => l.id === lojaId);
+  const nome = loja.nome + ' – ' + new Date().toLocaleDateString('pt-BR', { month:'2-digit', year:'numeric' });
+  const r = await sb.from('inventarios').insert({ nome, loja_id: lojaId }).select().single();
+  if(r.error) return alert(r.error.message);
+  invId = r.data.id; $('#dInv').close();
+  await loadAll(); aba('tCont');
+}
+
+/* ---------- Contagem ---------- */
+function renderInvSel(){
+  const abertos = invs.filter(i => i.status === 'aberto');
+  $('#invSel').innerHTML = abertos.length
+    ? abertos.map(i => `<option value="${i.id}">${esc(i.lojas?.nome || i.nome)} (${fmtData(i.criado_em)})</option>`).join('')
+    : '<option value="">(nenhum aberto)</option>';
+  if(!abertos.find(i => i.id === invId)) invId = abertos[0]?.id || null;
+  $('#invSel').value = invId || '';
+}
+function selInv(){ invId = $('#invSel').value || null; renderContagem(); }
+async function renderContagem(){
+  renderInvSel();
+  $('#contForm').hidden = !invId; $('#contLista').hidden = !invId;
+  if(!invId) return;
+  const r = await sb.from('contagens').select('id, quantidade, produtos(nome, marca, codigo_barras)', { count:'exact' })
+    .eq('inventario_id', invId).order('atualizado_em', {ascending:false}).limit(100);
+  $('#contInfo').textContent = `${r.count || 0} produto(s) contado(s)` + ((r.count || 0) > 100 ? ' (mostrando os últimos 100)' : '');
+  $('#listaCont').innerHTML = (r.data || []).map(c => `<tr>
+    <td>${esc(c.produtos.nome)}<div class="muted">${esc([c.produtos.marca, c.produtos.codigo_barras].filter(Boolean).join(' · '))}</div></td>
+    <td class="n"><b>${num(c.quantidade)}</b></td>
+    <td class="n"><button onclick="ajustarContagem('${c.id}',${c.quantidade})">✏️</button> <button class="d" onclick="removerContagem('${c.id}')">🗑</button></td></tr>`).join('')
+    || '<tr><td colspan="3" class="muted">Nada contado ainda.</td></tr>';
+}
+async function addContagem(){
+  const cod = $('#cod').value.trim(), q = parseFloat($('#qtd').value);
+  if(!cod || isNaN(q)) return;
+  const prod = eanMap.get(cod);
+  if(!prod){
+    if(confirm(`Código ${cod} não está no catálogo. Cadastrar agora?`)) novoProduto(cod);
+    return;
+  }
+  const inv = invs.find(i => i.id === invId);
+  const ex = await sb.from('contagens').select('id, quantidade').eq('inventario_id', invId).eq('produto_id', prod.id).maybeSingle();
+  let r;
+  if(ex.data){
+    r = await sb.from('contagens').update({ quantidade: Number(ex.data.quantidade) + q, atualizado_em: new Date().toISOString() }).eq('id', ex.data.id);
+  } else {
+    const el = await sb.from('estoque_loja').select('quantidade, custo').eq('loja_id', inv.loja_id).eq('produto_id', prod.id).maybeSingle();
+    r = await sb.from('contagens').insert({ inventario_id: invId, produto_id: prod.id, quantidade: q,
+      esperado: el.data ? el.data.quantidade : 0, custo: el.data ? el.data.custo : (prod.custo || 0) });
+  }
+  if(r.error) return alert(r.error.message);
+  $('#ultimo').textContent = `✔ ${prod.nome} (+${num(q)})`;
+  $('#cod').value = ''; $('#qtd').value = 1; if(navigator.vibrate) navigator.vibrate(60);
+  renderContagem();
+}
+async function ajustarContagem(id, atual){
+  const v = prompt('Quantidade contada correta:', atual);
+  if(v === null || isNaN(parseFloat(v))) return;
+  await sb.from('contagens').update({ quantidade: parseFloat(v), atualizado_em: new Date().toISOString() }).eq('id', id);
+  renderContagem();
+}
+async function removerContagem(id){
+  if(!confirm('Remover esta contagem?')) return;
+  await sb.from('contagens').delete().eq('id', id); renderContagem();
+}
+
+/* ---------- Inventários: lista e relatório ---------- */
+function renderInvs(){
+  $('#listaInv').innerHTML = invs.map(i => `<tr>
+    <td>${esc(i.lojas?.nome || i.nome)}<div class="muted">${fmtData(i.finalizado_em || i.criado_em)}</div></td>
+    <td><span class="tag ${i.status === 'aberto' ? 'run' : 'ok'}">${i.status === 'aberto' ? 'em andamento' : 'finalizado'}</span></td>
+    <td class="n">${i.status === 'finalizado' ? pct(i.itens_ok, i.total_itens) : '-'}</td>
+    <td class="n"><button onclick="verRel('${i.id}')">Ver</button></td></tr>`).join('')
+    || '<tr><td colspan="4" class="muted">Nenhum inventário.</td></tr>';
+}
+async function verRel(id){
+  const inv = invs.find(i => i.id === id);
+  let cs;
+  try{
+    cs = await fetchAll(() => sb.from('contagens').select('produto_id,quantidade,esperado,custo,produtos(nome,marca,codigo_barras)').eq('inventario_id', id).order('id'));
+  }catch(e){ return alert(e.message); }
+  let ok = 0, falta = 0, sobra = 0, vest = 0;
+  const dif = [];
+  relRows = cs.map(c => {
+    const d = Number(c.quantidade) - Number(c.esperado), v = d * Number(c.custo);
+    vest += Number(c.esperado) * Number(c.custo);
+    if(d === 0) ok++; else { dif.push({ c, d, v }); if(v < 0) falta += v; else sobra += v; }
+    return [c.produtos.marca || '', c.produtos.nome, c.produtos.codigo_barras || '', c.esperado, c.quantidade, d, v];
+  });
+  dif.sort((a, b) => Math.abs(b.v) - Math.abs(a.v));
+
+  let nc = '';
+  if(inv.status === 'aberto' && inv.loja_id){
+    const est = await fetchAll(() => sb.from('estoque_loja').select('produto_id,quantidade,custo').eq('loja_id', inv.loja_id).gt('quantidade', 0).order('produto_id'));
+    const cont = new Set(cs.map(c => c.produto_id));
+    const rest = est.filter(e => !cont.has(e.produto_id));
+    nc = `<p class="muted">${rest.length} produto(s) com estoque no sistema ainda não foram contados (${brl(rest.reduce((s, e) => s + Number(e.quantidade) * Number(e.custo), 0))} a custo).</p>`;
+  }
+  $('#rel').innerHTML = `<div class="card scroll">
+    <h3>${esc(inv.lojas?.nome || inv.nome)} — ${inv.status === 'aberto' ? 'em andamento' : 'finalizado em ' + fmtData(inv.finalizado_em)}</h3>
+    <div class="kpis">
+      <div class="kpi"><span>Acuracidade</span><b>${pct(ok, cs.length)}</b><small>${ok} de ${cs.length} itens corretos</small></div>
+      <div class="kpi"><span>Divergência líquida</span><b class="${falta + sobra < 0 ? 'neg' : 'pos'}">${brl(falta + sobra)}</b><small>${pct(Math.abs(falta) + sobra, vest)} do estoque contado</small></div>
+      <div class="kpi"><span>Falta</span><b class="neg">${brl(falta)}</b></div>
+      <div class="kpi"><span>Sobra</span><b class="pos">${brl(sobra)}</b></div>
+    </div>
+    ${nc}
+    <table><thead><tr><th>Produto</th><th class="n">Esp.</th><th class="n">Cont.</th><th class="n">Dif.</th><th class="n">Valor</th></tr></thead><tbody>
+    ${dif.slice(0, 300).map(({c, d, v}) => `<tr><td>${esc(c.produtos.nome)}<div class="muted">${esc(c.produtos.marca || '')}</div></td>
+      <td class="n">${num(c.esperado)}</td><td class="n">${num(c.quantidade)}</td>
+      <td class="n ${d < 0 ? 'neg' : 'pos'}">${d > 0 ? '+' : ''}${num(d)}</td><td class="n ${v < 0 ? 'neg' : 'pos'}">${brl(v)}</td></tr>`).join('')
+      || '<tr><td colspan="5" class="muted">Nenhuma divergência. 🎉</td></tr>'}
+    </tbody></table>
+    ${dif.length > 300 ? `<p class="muted">Mostrando 300 de ${dif.length} divergências. Exporte o CSV para ver todas.</p>` : ''}
+    <div class="row noprint" style="margin-top:10px">
+      <button onclick="baixarCsv('${esc((inv.lojas?.nome || inv.nome).replace(/[^\w]+/g, '_'))}')">⬇ Exportar CSV</button>
+      ${inv.status === 'aberto' ? `<button class="p" onclick="finalizar('${inv.id}')">Finalizar inventário</button>` : ''}
+    </div>
+  </div>`;
+  $('#rel').scrollIntoView({ behavior:'smooth' });
+}
+function baixarCsv(nome){
+  const linhas = [['marca','produto','ean','esperado','contado','diferenca','valor_diferenca']].concat(relRows)
+    .map(r => r.map(x => '"' + String(x).replace(/"/g, '""').replace('.', ',') + '"').join(';'));
+  const blob = new Blob(['\uFEFF' + linhas.join('\n')], { type:'text/csv;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = 'inventario_' + nome + '.csv'; a.click();
+}
+async function finalizar(id){
+  if(!confirm('Finalizar este inventário? Não será possível contar mais nele.')) return;
+  const zerar = confirm('Produtos que têm estoque no sistema mas NÃO foram contados devem ser considerados zerados (contam como falta)?\n\nOK = sim, contar como falta\nCancelar = não, ignorar esses itens');
+  const ajustar = confirm('Ajustar o estoque desta loja para as quantidades contadas?\n\nOK = ajustar\nCancelar = não mexer no estoque');
+  const r = await sb.rpc('finalizar_inventario', { p_id: id, p_ajustar: ajustar, p_zerar: zerar });
+  if(r.error) return alert(r.error.message);
+  estRows = null; await loadAll(); verRel(id);
+}
+
+start();
+</script>
+</body>
+</html>
