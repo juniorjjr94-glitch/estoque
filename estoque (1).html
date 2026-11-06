@@ -1,0 +1,469 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#1f6feb">
+<title>Estoque</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://unpkg.com/html5-qrcode"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<style>
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#f4f6f8;color:#1b1f24}
+  header{background:#1f6feb;color:#fff;padding:12px 16px;display:flex;justify-content:space-between;align-items:center}
+  header h1{font-size:18px;margin:0}
+  nav{display:flex;background:#fff;border-bottom:1px solid #dde2e8;position:sticky;top:0;z-index:5}
+  .kpis{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px}
+  .kpi{background:#fff;border:1px solid #dde2e8;border-radius:10px;padding:12px}
+  .kpi span{display:block;font-size:12px;color:#6e7781}
+  .kpi b{font-size:20px}
+  .bar{margin:8px 0}
+  .bl{display:flex;justify-content:space-between;gap:8px;font-size:13px}
+  .bt{background:#eaeef2;border-radius:6px;height:10px;margin-top:3px;overflow:hidden}
+  .bf{background:#1f6feb;height:100%;border-radius:6px}
+  nav button{flex:1;padding:12px 4px;border:0;background:none;font-size:13px;border-bottom:3px solid transparent;color:#57606a}
+  nav button.on{color:#1f6feb;border-color:#1f6feb;font-weight:600}
+  main,.box{max-width:900px;margin:0 auto;padding:14px}
+  .card{background:#fff;border:1px solid #dde2e8;border-radius:10px;padding:12px;margin-bottom:12px}
+  input,select{width:100%;padding:11px;border:1px solid #c5ccd3;border-radius:8px;font-size:16px;margin:4px 0 10px;background:#fff}
+  button{font-size:15px;border-radius:8px;border:1px solid #c5ccd3;background:#fff;padding:10px 14px;cursor:pointer}
+  button.p{background:#1f6feb;border-color:#1f6feb;color:#fff}
+  button.d{color:#cf222e}
+  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .row>*{flex:1}
+  .row>button{flex:0 0 auto}
+  table{width:100%;border-collapse:collapse;font-size:14px}
+  th,td{padding:8px 6px;border-bottom:1px solid #eaeef2;text-align:left}
+  td.n,th.n{text-align:right}
+  .neg{color:#cf222e;font-weight:600}.pos{color:#1a7f37;font-weight:600}
+  .muted{color:#6e7781;font-size:13px}
+  dialog{border:0;border-radius:12px;padding:16px;width:min(92vw,420px)}
+  dialog::backdrop{background:rgba(0,0,0,.4)}
+  #scanOv{position:fixed;inset:0;background:#000d;z-index:50;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:16px}
+  #reader{width:min(92vw,420px);background:#000}
+  [hidden]{display:none!important}
+  .scroll{overflow-x:auto}
+</style>
+</head>
+<body>
+
+<!-- CONFIGURAÇÃO -->
+<section id="setup" hidden><div class="box">
+  <h2>Configurar</h2>
+  <p class="muted">Use apenas a chave pública (anon / publishable). Nunca use a service_role.</p>
+  <label>URL do projeto Supabase</label>
+  <input id="cfgUrl" placeholder="https://xxxx.supabase.co">
+  <label>Chave pública (anon / publishable)</label>
+  <input id="cfgKey" placeholder="cole aqui a chave pública">
+  <button class="p" onclick="saveCfg()">Salvar</button>
+</div></section>
+
+<!-- LOGIN -->
+<section id="login" hidden><div class="box">
+  <h2>Entrar</h2>
+  <input id="email" type="email" placeholder="E-mail" autocomplete="username">
+  <input id="senha" type="password" placeholder="Senha (mín. 6 caracteres)" autocomplete="current-password">
+  <div class="row">
+    <button class="p" onclick="doLogin()">Entrar</button>
+    <button onclick="doSignup()">Criar conta</button>
+  </div>
+  <p><button onclick="resetCfg()" class="muted">Trocar configuração</button></p>
+</div></section>
+
+<!-- APP -->
+<section id="app" hidden>
+  <header><h1>📦 Estoque</h1><button onclick="logout()">Sair</button></header>
+  <nav>
+    <button data-t="tDash" class="on">Dashboard</button>
+    <button data-t="tProd">Produtos</button>
+    <button data-t="tCont">Contagem</button>
+    <button data-t="tInv">Inventários</button>
+  </nav>
+
+  <main id="tDash"><div id="dash"></div></main>
+
+  <main id="tProd" hidden>
+    <div class="card row">
+      <div><div class="muted">Itens</div><b id="totItens">0</b></div>
+      <div><div class="muted">Valor em estoque (custo)</div><b id="totValor">R$ 0,00</b></div>
+    </div>
+    <div class="row">
+      <input id="q" placeholder="Buscar por nome ou código" oninput="renderProdutos()">
+      <button class="p" onclick="novoProduto()">+ Produto</button>
+    </div>
+    <div class="row" style="margin-bottom:10px">
+      <button onclick="$('#arq').click()">📥 Importar planilha</button>
+      <input type="file" id="arq" accept=".xlsx,.xls,.csv" hidden onchange="importar(this)">
+    </div>
+    <div class="card scroll"><table>
+      <thead><tr><th>Produto</th><th class="n">Custo</th><th class="n">Estoque</th><th></th></tr></thead>
+      <tbody id="listaProd"></tbody>
+    </table></div>
+  </main>
+
+  <main id="tCont" hidden>
+    <div class="card">
+      <label>Inventário aberto</label>
+      <div class="row">
+        <select id="invSel" onchange="selInv()"></select>
+        <button onclick="novoInv()">+ Novo</button>
+      </div>
+      <div id="contForm" hidden>
+        <label>Código de barras</label>
+        <div class="row">
+          <input id="cod" inputmode="numeric" placeholder="Digite ou escaneie" onkeydown="if(event.key==='Enter')addContagem()">
+          <button onclick="scan(c=>{$('#cod').value=c;addContagem()})">📷 Escanear</button>
+        </div>
+        <label>Quantidade a somar</label>
+        <input id="qtd" type="number" step="any" value="1">
+        <button class="p" onclick="addContagem()" style="width:100%">Adicionar contagem</button>
+      </div>
+    </div>
+    <div class="card scroll" id="contLista" hidden><table>
+      <thead><tr><th>Produto</th><th class="n">Contado</th><th></th></tr></thead>
+      <tbody id="listaCont"></tbody>
+    </table></div>
+  </main>
+
+  <main id="tInv" hidden>
+    <div class="card scroll"><table>
+      <thead><tr><th>Inventário</th><th>Status</th><th></th></tr></thead>
+      <tbody id="listaInv"></tbody>
+    </table></div>
+    <div id="rel"></div>
+  </main>
+</section>
+
+<dialog id="dProd">
+  <h3 id="dTitulo">Produto</h3>
+  <input type="hidden" id="pId">
+  <label>Código de barras</label>
+  <div class="row">
+    <input id="pCod" inputmode="numeric">
+    <button onclick="scan(c=>$('#pCod').value=c)">📷</button>
+  </div>
+  <label>Marca</label><input id="pMarca">
+  <label>Nome</label><input id="pNome">
+  <label>Custo (R$)</label><input id="pCusto" type="number" step="0.01" value="0">
+  <label>Estoque atual</label><input id="pEst" type="number" step="any" value="0">
+  <div class="row">
+    <button onclick="$('#dProd').close()">Cancelar</button>
+    <button class="p" onclick="salvarProduto()">Salvar</button>
+  </div>
+</dialog>
+
+<div id="scanOv" hidden>
+  <div id="reader"></div>
+  <button onclick="stopScan()">Fechar</button>
+</div>
+
+<script>
+const DEFAULT_URL = 'https://hacwqnmynmvrjijhxuou.supabase.co';
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const brl = n => Number(n || 0).toLocaleString('pt-BR', {style:'currency', currency:'BRL'});
+const num = n => Number(n || 0).toLocaleString('pt-BR', {maximumFractionDigits:3});
+let sb, produtos = [], invs = [], invId = null, scanner = null;
+
+function show(id){ ['setup','login','app'].forEach(v => $('#'+v).hidden = v !== id); }
+
+/* ---------- Início / config / login ---------- */
+async function start(){
+  const url = localStorage.sb_url, key = localStorage.sb_key;
+  if(!url || !key){ $('#cfgUrl').value = url || DEFAULT_URL; return show('setup'); }
+  sb = supabase.createClient(url, key);
+  const { data } = await sb.auth.getSession();
+  if(data.session){ show('app'); await loadAll(); } else show('login');
+}
+function saveCfg(){
+  const u = $('#cfgUrl').value.trim(), k = $('#cfgKey').value.trim();
+  if(!u || !k) return alert('Preencha os dois campos.');
+  localStorage.sb_url = u; localStorage.sb_key = k; start();
+}
+function resetCfg(){ localStorage.removeItem('sb_key'); start(); }
+async function doLogin(){
+  const { error } = await sb.auth.signInWithPassword({ email:$('#email').value.trim(), password:$('#senha').value });
+  if(error) return alert('Erro ao entrar: ' + error.message);
+  start();
+}
+async function doSignup(){
+  const { data, error } = await sb.auth.signUp({ email:$('#email').value.trim(), password:$('#senha').value });
+  if(error) return alert('Erro: ' + error.message);
+  if(!data.session) alert('Conta criada. Se o Supabase pedir confirmação, confirme pelo e-mail e depois entre.');
+  else start();
+}
+async function logout(){ await sb.auth.signOut(); start(); }
+
+/* ---------- Abas ---------- */
+document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('nav button').forEach(x => x.classList.toggle('on', x === b));
+  ['tDash','tProd','tCont','tInv'].forEach(t => $('#'+t).hidden = t !== b.dataset.t);
+  if(b.dataset.t === 'tDash') renderDash();
+  if(b.dataset.t === 'tCont') renderContagem();
+  if(b.dataset.t === 'tInv') renderInvs();
+});
+
+/* ---------- Dados ---------- */
+async function loadAll(){
+  const p = await sb.from('produtos').select('*').order('nome');
+  if(p.error) return alert('Erro ao carregar produtos: ' + p.error.message + '\n(Você rodou o schema.sql?)');
+  produtos = p.data;
+  const i = await sb.from('inventarios').select('*').order('criado_em', {ascending:false});
+  invs = i.data || [];
+  renderProdutos(); renderInvSel(); renderDash();
+}
+
+/* ---------- Produtos ---------- */
+function renderProdutos(){
+  const q = $('#q').value.trim().toLowerCase();
+  const lista = produtos.filter(p => !q || p.nome.toLowerCase().includes(q) || (p.marca||'').toLowerCase().includes(q) || (p.codigo_barras||'').includes(q));
+  $('#listaProd').innerHTML = lista.map(p => `<tr>
+    <td>${esc(p.nome)}<div class="muted">${esc([p.marca, p.codigo_barras || 'sem código'].filter(Boolean).join(' · '))}</div></td>
+    <td class="n">${brl(p.custo)}</td><td class="n">${num(p.estoque_atual)}</td>
+    <td class="n"><button onclick="editarProduto('${p.id}')">✏️</button> <button class="d" onclick="excluirProduto('${p.id}')">🗑</button></td></tr>`).join('')
+    || '<tr><td colspan="4" class="muted">Nenhum produto.</td></tr>';
+  $('#totItens').textContent = produtos.length;
+  $('#totValor').textContent = brl(produtos.reduce((s,p) => s + p.custo * p.estoque_atual, 0));
+}
+function abrirDlg(p = {}){
+  $('#dTitulo').textContent = p.id ? 'Editar produto' : 'Novo produto';
+  $('#pId').value = p.id || ''; $('#pCod').value = p.codigo_barras || '';
+  $('#pMarca').value = p.marca || ''; $('#pNome').value = p.nome || ''; $('#pCusto').value = p.custo ?? 0; $('#pEst').value = p.estoque_atual ?? 0;
+  $('#dProd').showModal();
+}
+function novoProduto(cod = ''){ abrirDlg({ codigo_barras: cod }); }
+function editarProduto(id){ abrirDlg(produtos.find(p => p.id === id)); }
+async function salvarProduto(){
+  const row = {
+    codigo_barras: $('#pCod').value.trim() || null,
+    marca: $('#pMarca').value.trim() || null,
+    nome: $('#pNome').value.trim(),
+    custo: parseFloat($('#pCusto').value) || 0,
+    estoque_atual: parseFloat($('#pEst').value) || 0
+  };
+  if(!row.nome) return alert('Informe o nome.');
+  const id = $('#pId').value;
+  const r = id ? await sb.from('produtos').update(row).eq('id', id) : await sb.from('produtos').insert(row);
+  if(r.error) return alert('Erro: ' + (r.error.code === '23505' ? 'esse código de barras já existe.' : r.error.message));
+  $('#dProd').close(); await loadAll();
+}
+async function excluirProduto(id){
+  if(!confirm('Excluir este produto? Contagens dele também serão apagadas.')) return;
+  const r = await sb.from('produtos').delete().eq('id', id);
+  if(r.error) return alert(r.error.message);
+  loadAll();
+}
+
+/* ---------- Dashboard ---------- */
+function barras(itens){
+  const max = Math.max(...itens.map(i => i.v), 1);
+  return itens.map(i => `<div class="bar"><div class="bl"><span>${esc(i.l)}</span><b>${brl(i.v)}</b></div>
+    <div class="bt"><div class="bf" style="width:${Math.max(0, i.v) / max * 100}%"></div></div></div>`).join('')
+    || '<p class="muted">Sem dados.</p>';
+}
+async function renderDash(){
+  const el = $('#dash'); if(!el) return;
+  const valorDe = p => Number(p.custo) * Number(p.estoque_atual);
+  const unidades = produtos.reduce((s,p) => s + Number(p.estoque_atual), 0);
+  const valor = produtos.reduce((s,p) => s + valorDe(p), 0);
+  const zerados = produtos.filter(p => Number(p.estoque_atual) <= 0);
+  const marcas = new Map();
+  produtos.forEach(p => { const m = p.marca || '(sem marca)'; marcas.set(m, (marcas.get(m) || 0) + valorDe(p)); });
+  const topMarcas = [...marcas].map(([l,v]) => ({l,v})).sort((a,b) => b.v - a.v).slice(0, 10);
+  const topProd = [...produtos].sort((a,b) => valorDe(b) - valorDe(a)).slice(0, 10).map(p => ({ l:p.nome, v:valorDe(p) }));
+
+  el.innerHTML = `
+    <div class="kpis">
+      <div class="kpi"><span>Produtos</span><b>${produtos.length}</b></div>
+      <div class="kpi"><span>Unidades em estoque</span><b>${num(unidades)}</b></div>
+      <div class="kpi"><span>Valor em estoque (custo)</span><b>${brl(valor)}</b></div>
+      <div class="kpi"><span>Sem estoque</span><b class="${zerados.length ? 'neg' : ''}">${zerados.length}</b></div>
+    </div>
+    <div class="card"><h3>Valor por marca (top 10)</h3>${barras(topMarcas)}</div>
+    <div class="card"><h3>Produtos de maior valor em estoque</h3>${barras(topProd)}</div>
+    <div class="card"><h3>Sem estoque</h3>${zerados.slice(0, 10).map(p => `<div class="bl" style="padding:4px 0"><span>${esc(p.nome)}</span><span class="muted">${esc(p.marca || '')}</span></div>`).join('')
+      || '<p class="muted">Nenhum produto zerado.</p>'}
+      ${zerados.length > 10 ? `<p class="muted">+ ${zerados.length - 10} outros</p>` : ''}</div>
+    <div class="card scroll" id="dashInv"><h3>Últimos inventários</h3><p class="muted">Carregando…</p></div>`;
+
+  const r = await sb.from('contagens').select('inventario_id, quantidade, esperado, produtos(custo)').limit(10000);
+  const st = new Map();
+  (r.data || []).forEach(c => {
+    const s = st.get(c.inventario_id) || { n:0, ok:0, falta:0, sobra:0 };
+    const d = Number(c.quantidade) - Number(c.esperado), v = d * Number(c.produtos?.custo || 0);
+    s.n++; if(d === 0) s.ok++; else if(v < 0) s.falta += v; else s.sobra += v;
+    st.set(c.inventario_id, s);
+  });
+  const linhas = invs.slice(0, 5).map(i => {
+    const s = st.get(i.id) || { n:0, ok:0, falta:0, sobra:0 };
+    const acc = s.n ? Math.round(s.ok / s.n * 100) + '%' : '-';
+    return `<tr><td>${esc(i.nome)}<div class="muted">${i.status}</div></td><td class="n">${s.n}</td><td class="n">${acc}</td>
+      <td class="n neg">${brl(s.falta)}</td><td class="n pos">${brl(s.sobra)}</td></tr>`;
+  }).join('');
+  const box = $('#dashInv');
+  if(box) box.innerHTML = `<h3>Últimos inventários</h3>` + (linhas
+    ? `<table><thead><tr><th>Inventário</th><th class="n">Itens</th><th class="n">Acerto</th><th class="n">Falta</th><th class="n">Sobra</th></tr></thead><tbody>${linhas}</tbody></table>`
+    : '<p class="muted">Nenhum inventário ainda.</p>');
+}
+
+/* ---------- Importar planilha ---------- */
+const norm = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '');
+const toNum = v => {
+  if(typeof v === 'number') return v;
+  let s = String(v ?? '').replace(/[^0-9,.\-]/g, '');
+  if(!s) return 0;
+  if(s.includes(',')) s = s.replace(/\./g, '').replace(',', '.');
+  return parseFloat(s) || 0;
+};
+async function importar(inp){
+  const f = inp.files[0]; inp.value = '';
+  if(!f) return;
+  try{
+    const wb = XLSX.read(await f.arrayBuffer(), { type:'array' });
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval:'' });
+    const alias = {
+      marca:['marca','fabricante'],
+      nome:['produto','nome','descricao','item'],
+      ean:['ean','codigodebarras','codigobarras','gtin','codigo','barras'],
+      estoque:['estoque','quantidade','qtd','qtde','saldo'],
+      custo:['custo','precodecusto','valorcusto','precocusto']
+    };
+    const get = (r, k) => { for(const key of Object.keys(r)) if(alias[k].includes(norm(key))) return r[key]; return ''; };
+    const porEan = new Map(), semEan = [];
+    for(const r of rows){
+      const nome = String(get(r,'nome')).trim();
+      if(!nome) continue;
+      const ean = String(get(r,'ean')).trim().replace(/\.0$/, '');
+      const item = { marca: String(get(r,'marca')).trim() || null, nome, codigo_barras: ean || null,
+                     estoque_atual: toNum(get(r,'estoque')), custo: toNum(get(r,'custo')) };
+      if(ean) porEan.set(ean, item); else semEan.push(item);
+    }
+    const lista = [...porEan.values()];
+    const total = lista.length + semEan.length;
+    if(!total) return alert('Não encontrei linhas válidas. Confira os títulos da 1ª linha: marca, produto, ean, estoque, custo.');
+    if(!confirm(`Importar ${total} produtos? Quem já tem o mesmo EAN será atualizado.`)) return;
+    for(let i = 0; i < lista.length; i += 500){
+      const r = await sb.from('produtos').upsert(lista.slice(i, i + 500), { onConflict:'codigo_barras' });
+      if(r.error) throw r.error;
+    }
+    if(semEan.length){ const r = await sb.from('produtos').insert(semEan); if(r.error) throw r.error; }
+    alert('Importação concluída: ' + total + ' produtos.');
+    await loadAll();
+  }catch(e){ alert('Erro na importação: ' + (e.message || e)); }
+}
+
+/* ---------- Scanner ---------- */
+function scan(cb){
+  $('#scanOv').hidden = false;
+  scanner = new Html5Qrcode('reader');
+  scanner.start({ facingMode:'environment' }, { fps:10, qrbox:{ width:260, height:140 } },
+    async txt => { await stopScan(); cb(txt); }, () => {})
+    .catch(e => { stopScan(); alert('Não consegui abrir a câmera (precisa de HTTPS e permissão): ' + e); });
+}
+async function stopScan(){
+  try{ if(scanner){ await scanner.stop(); scanner.clear(); } }catch(e){}
+  scanner = null; $('#scanOv').hidden = true;
+}
+
+/* ---------- Contagem ---------- */
+function renderInvSel(){
+  const abertos = invs.filter(i => i.status === 'aberto');
+  $('#invSel').innerHTML = abertos.length
+    ? abertos.map(i => `<option value="${i.id}">${esc(i.nome)}</option>`).join('')
+    : '<option value="">(nenhum aberto)</option>';
+  if(!abertos.find(i => i.id === invId)) invId = abertos[0]?.id || null;
+  $('#invSel').value = invId || '';
+}
+function selInv(){ invId = $('#invSel').value || null; renderContagem(); }
+async function novoInv(){
+  const nome = prompt('Nome do inventário:', 'Inventário ' + new Date().toLocaleDateString('pt-BR'));
+  if(!nome) return;
+  const r = await sb.from('inventarios').insert({ nome }).select().single();
+  if(r.error) return alert(r.error.message);
+  invId = r.data.id; await loadAll(); renderContagem();
+}
+async function renderContagem(){
+  renderInvSel();
+  $('#contForm').hidden = !invId; $('#contLista').hidden = !invId;
+  if(!invId) return;
+  const r = await sb.from('contagens').select('id, quantidade, produtos(nome, codigo_barras)')
+    .eq('inventario_id', invId).order('atualizado_em', {ascending:false});
+  $('#listaCont').innerHTML = (r.data || []).map(c => `<tr>
+    <td>${esc(c.produtos.nome)}<div class="muted">${esc(c.produtos.codigo_barras||'')}</div></td>
+    <td class="n"><b>${num(c.quantidade)}</b></td>
+    <td class="n"><button onclick="ajustarContagem('${c.id}',${c.quantidade})">✏️</button> <button class="d" onclick="removerContagem('${c.id}')">🗑</button></td></tr>`).join('')
+    || '<tr><td colspan="3" class="muted">Nada contado ainda.</td></tr>';
+}
+async function addContagem(){
+  const cod = $('#cod').value.trim(), q = parseFloat($('#qtd').value);
+  if(!cod || isNaN(q)) return;
+  const prod = produtos.find(p => p.codigo_barras === cod);
+  if(!prod){
+    if(confirm(`Código ${cod} não cadastrado. Cadastrar agora?`)){ novoProduto(cod); }
+    return;
+  }
+  const ex = await sb.from('contagens').select('id, quantidade').eq('inventario_id', invId).eq('produto_id', prod.id).maybeSingle();
+  const r = ex.data
+    ? await sb.from('contagens').update({ quantidade: Number(ex.data.quantidade) + q, atualizado_em: new Date().toISOString() }).eq('id', ex.data.id)
+    : await sb.from('contagens').insert({ inventario_id: invId, produto_id: prod.id, quantidade: q, esperado: prod.estoque_atual });
+  if(r.error) return alert(r.error.message);
+  $('#cod').value = ''; $('#qtd').value = 1; if(navigator.vibrate) navigator.vibrate(60);
+  renderContagem();
+}
+async function ajustarContagem(id, atual){
+  const v = prompt('Quantidade contada correta:', atual);
+  if(v === null || isNaN(parseFloat(v))) return;
+  await sb.from('contagens').update({ quantidade: parseFloat(v), atualizado_em: new Date().toISOString() }).eq('id', id);
+  renderContagem();
+}
+async function removerContagem(id){
+  if(!confirm('Remover esta contagem?')) return;
+  await sb.from('contagens').delete().eq('id', id); renderContagem();
+}
+
+/* ---------- Inventários / divergências ---------- */
+function renderInvs(){
+  $('#listaInv').innerHTML = invs.map(i => `<tr>
+    <td>${esc(i.nome)}<div class="muted">${new Date(i.criado_em).toLocaleDateString('pt-BR')}</div></td>
+    <td>${i.status === 'aberto' ? '🟢 aberto' : '⚪ finalizado'}</td>
+    <td class="n"><button onclick="verRel('${i.id}')">Ver</button></td></tr>`).join('')
+    || '<tr><td colspan="3" class="muted">Nenhum inventário.</td></tr>';
+}
+async function verRel(id){
+  const inv = invs.find(i => i.id === id);
+  const r = await sb.from('contagens').select('quantidade, esperado, produtos(nome, custo, codigo_barras)').eq('inventario_id', id);
+  const cs = r.data || [];
+  const contados = new Set(cs.map(c => c.produtos?.codigo_barras));
+  const naoContados = produtos.filter(p => !cs.some(c => c.produtos?.nome === p.nome && c.produtos?.codigo_barras === p.codigo_barras));
+  let totDif = 0;
+  const linhas = cs.map(c => {
+    const dif = Number(c.quantidade) - Number(c.esperado), val = dif * Number(c.produtos.custo);
+    totDif += val;
+    return { c, dif, val };
+  }).sort((a,b) => Math.abs(b.val) - Math.abs(a.val));
+  $('#rel').innerHTML = `<div class="card scroll">
+    <h3>${esc(inv.nome)} — ${inv.status}</h3>
+    <table><thead><tr><th>Produto</th><th class="n">Esperado</th><th class="n">Contado</th><th class="n">Dif.</th><th class="n">Valor</th></tr></thead><tbody>
+    ${linhas.map(({c,dif,val}) => `<tr><td>${esc(c.produtos.nome)}</td><td class="n">${num(c.esperado)}</td><td class="n">${num(c.quantidade)}</td>
+      <td class="n ${dif<0?'neg':dif>0?'pos':''}">${dif>0?'+':''}${num(dif)}</td><td class="n ${val<0?'neg':val>0?'pos':''}">${brl(val)}</td></tr>`).join('')
+      || '<tr><td colspan="5" class="muted">Sem contagens.</td></tr>'}
+    </tbody></table>
+    <p><b>Divergência total (custo): <span class="${totDif<0?'neg':'pos'}">${brl(totDif)}</span></b></p>
+    <p class="muted">${naoContados.length} produto(s) cadastrado(s) não foram contados neste inventário.</p>
+    ${inv.status === 'aberto' ? `<button class="p" onclick="finalizar('${inv.id}')">Finalizar inventário</button>` : ''}
+  </div>`;
+  $('#rel').scrollIntoView({ behavior:'smooth' });
+}
+async function finalizar(id){
+  if(!confirm('Finalizar este inventário? Não será possível contar mais nele.')) return;
+  const ajustar = confirm('Ajustar o estoque dos produtos contados para as quantidades contadas?\n\nOK = ajustar\nCancelar = só finalizar, sem mexer no estoque');
+  const r = await sb.rpc('finalizar_inventario', { p_id: id, p_ajustar: ajustar });
+  if(r.error) return alert(r.error.message);
+  await loadAll(); renderInvs(); verRel(id);
+}
+
+start();
+</script>
+</body>
+</html>
